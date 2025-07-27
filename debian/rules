@@ -1,13 +1,18 @@
 #!/usr/bin/make -f
 
 %:
-	dh $@ --no-automatic-dbgsym --parallel 
+	dh $@ --no-automatic-dbgsym --parallel
 
-build:
-	dh build
-	make
+override_dh_auto_configure:
+	mkdir -p obj-$(DEB_HOST_GNU_TYPE)
+	cd obj-$(DEB_HOST_GNU_TYPE) && cmake -S $(CURDIR) -B . -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
 
-clean:
-	dh clean
-	make clean
+override_dh_auto_build:
+	$(MAKE) -C obj-$(DEB_HOST_GNU_TYPE)
+
+override_dh_auto_install:
+	$(MAKE) -C obj-$(DEB_HOST_GNU_TYPE) DESTDIR=$(CURDIR)/debian/checkmd5-qt install
+
+override_dh_auto_clean:
+	rm -rf obj-*
 

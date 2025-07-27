@@ -1,12 +1,14 @@
-Source: checkmd5
+Source: checkmd5-qt
 Section: admin
 Priority: optional
 Maintainer: Adrian <adrian@mxlinux.org>
-Build-Depends: debhelper (>=10)
+Build-Depends: debhelper-compat (= 13),
+		cmake, 
+		qt6-base-dev
 Standards-Version: 3.9.8
 Vcs-Git: git://github.com/chkboom/checkmd5
 
-Package: checkmd5
+Package: checkmd5-qt
 Architecture: any
 Depends: ${misc:Depends}, ${shlibs:Depends}
-Description: Improved MD5 aggregate file checker
+Description: Improved MD5 aggregate file checker (Qt version)

@@ -1,21 +1,28 @@
-#ifndef MD5_H
-#define MD5_H
+#pragma once
 
-#include <stdint.h>
+#include <QByteArray>
+#include <cstdint>
 
-struct MD5Context {
-	uint32_t buf[4];
-	uint32_t bytes[2];
-	uint8_t in[64];
+class MD5
+{
+public:
+    MD5();
+    void update(const QByteArray& data);
+    void update(const uint8_t* data, size_t length);
+    QByteArray finalize();
+
+    static QByteArray hash(const QByteArray& data);
+
+private:
+    struct Context {
+        uint32_t buf[4];
+        uint32_t bytes[2];
+        uint8_t in[64];
+    };
+
+    Context m_context;
+    bool m_finalized = false;
+
+    static void byteReverse(uint8_t* buf, unsigned longs);
+    static void transform(uint32_t buf[4], const uint32_t in[16]);
 };
-
-void MD5Init(struct MD5Context *restrict const context);
-void MD5Update(struct MD5Context *restrict const context, const uint8_t *restrict buf, size_t len);
-void MD5Final(uint8_t digest[16], struct MD5Context *restrict const context);
-
-/*
- * This is needed to make RSAREF happy on some MS-DOS compilers.
- */
-typedef struct MD5Context MD5_CTX;
-
-#endif /* !MD5_H */

@@ -1,0 +1,6 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/i18n">
+        <!-- Translation files will be added here when available -->
+    </qresource>
+</RCC>

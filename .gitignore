@@ -8,3 +8,6 @@ checkmd5-qt
 i18n/mo
 CMakeCache.*
 Testing
+
+# Rust
+/target

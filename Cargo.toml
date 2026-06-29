@@ -1,0 +1,23 @@
+[package]
+name = "checkmd5"
+version = "0.100.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Tool for checking the integrity of multiple files as one unit using MD5"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "checkmd5"
+path = "src/main.rs"
+
+[lib]
+name = "checkmd5"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+md-5 = "0.11"
+signal-hook = "0.4"
+
+[profile.release]
+lto = true

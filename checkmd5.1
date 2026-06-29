@@ -1,8 +1,8 @@
 .Dd August 24, 2024
-.Dt CHECKMD5 1
+.Dt CHECKMD5-QT 1
 .Os
 .Sh NAME
-.Nm checkmd5
+.Nm checkmd5-qt
 .Nd verify files in lists using MD5 message digest
 .Sh SYNOPSIS
 .Nm
@@ -10,6 +10,7 @@
 .Op Fl \-verbose
 .Op Fl \-machine
 .Op Fl log Ns = Ns Ar file
+.Op Fl jobs Ns = Ns Ar count
 .Op Fl \-
 .Ar file Op ...
 .Sh DESCRIPTION
@@ -48,6 +49,11 @@ Every progress update occupies its own line with nothing else sharing it.
 Write information about the verification process to a log
 .Ar file .
 This is easy to parse, written in English and is not translated.
+.It Fl \-jobs Ns = Ns Ar count
+Hash up to
+.Ar count
+files in parallel.
+Use 0 to choose Qt's default thread count automatically.
 .It Fl \-
 Denotes the end of flags.
 Use this if any list files start with "-".
@@ -119,7 +125,7 @@ and each has their own merits.
 .Bl -tag -width -Ds
 .It Xr md5sum 1 No and Xr cksum 1
 These utilities both check files,
-however they offer no progress indication or escape key interruption.
+however they offer no aggregate progress indication.
 They can still be interrupted by normal means (eg. signals, break [Ctrl+C]).
 They can also create compatible list files, which is outside the scope of the
 .Nm

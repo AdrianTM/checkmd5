@@ -4,17 +4,17 @@ This is a C++20/Qt6 port of the original checkmd5 C utility.
 
 ## Features
 
-- **Qt6 Core**: Uses Qt data structures (QString, QByteArray, QFile, etc.) instead of standard library
+- **Qt6 Core/Concurrent**: Uses Qt data structures (QString, QByteArray, QFile, etc.) and optional parallel hashing
 - **C++20**: Modern C++ features with proper RAII and memory management
 - **Signal handling**: Proper Qt-style signal handling for graceful shutdown
 - **Cross-platform**: Qt provides better cross-platform compatibility
-- **Internationalization**: Built-in Qt translation support framework
+- **Cancellation**: Handles Ctrl+C/SIGTERM/SIGHUP for graceful shutdown
 
 ## Building
 
 Requirements:
 - CMake 3.16+
-- Qt6 Core
+- Qt6 Core and Concurrent
 - C++20 compatible compiler
 
 ```bash
@@ -29,8 +29,11 @@ make
 Same command-line interface as the original:
 
 ```bash
-./checkmd5-qt [--force] [--verbose] [--machine] [--log=file] file.md5
+./checkmd5-qt [--force] [--verbose] [--machine] [--log=file] [--jobs=count] file.md5
 ```
+
+Use `--jobs=count` to hash multiple files in parallel, or `--jobs=0` to use Qt's default thread count.
+Machine mode writes progress percentages to stdout for script consumption.
 
 ## Key Changes from C Version
 
@@ -45,5 +48,10 @@ Same command-line interface as the original:
 
 - `CheckMD5` class: Main application logic with Qt signals
 - `MD5` class: Streamlined MD5 hasher using QByteArray
-- CMake build system with automatic MOC/RCC processing
-- Resource file for future translation support
+- CMake build system with automatic MOC processing
+- CMake/CTest coverage for success, mismatch, malformed-list, missing-file, machine-output, and parallel checks
+
+## Translation Status
+
+The original gettext catalogs are not used by the Qt port and have been removed from the active source tree.
+Qt translation wiring should be added with a future `.ts`/`.qm` pipeline if localized output is required.

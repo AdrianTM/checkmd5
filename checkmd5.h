@@ -25,25 +25,26 @@ public:
     ExitCode run(const QStringList& arguments);
 
 signals:
-    void finished(ExitCode result);
     void progressUpdated(float percentage);
-    void statusMessage(const QString& message);
 
 private:
     ExitCode checkFiles(const QList<CheckTarget>& targets);
+    ExitCode checkFilesParallel(const QList<CheckTarget>& targets, int jobCount);
     QList<CheckTarget> loadTargets(const QStringList& sumFiles);
     bool checkForAbort();
     void logMessage(bool console, const QString& message);
     void updateProgress(qint64 processed, qint64 total);
+    void scheduleProgressUpdate(qint64 processed, qint64 total);
 
     // Options
     QString m_logFile;
     bool m_force = false;
     bool m_machine = false;
     bool m_verbose = false;
+    int m_jobs = 1;
 
     // State
     qint64 m_nextProgressUpdate = 0;
-    QTextStream* m_logStream = nullptr;
-    volatile bool m_aborted = false;
+    std::unique_ptr<QTextStream> m_logStream;
+    qint64 m_lastNotifiedProgress = 0;
 };

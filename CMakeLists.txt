@@ -4,6 +4,14 @@ project(checkmd5-qt VERSION 0.100 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Default to an optimized build when the user hasn't chosen a build type.
+# Optimization is only applied per build type (Release enables IPO/-O3), so
+# without this an unspecified build silently produces an unoptimized (-O0)
+# binary. A Debug build is still honored when explicitly requested.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 # Find Qt6
 find_package(Qt6 REQUIRED COMPONENTS Core)
 

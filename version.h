@@ -1,3 +1,3 @@
 #pragma once
 
-#define VERSION "0.100"
+inline constexpr auto CHECKMD5_VERSION = "0.100";

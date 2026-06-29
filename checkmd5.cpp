@@ -24,6 +24,17 @@
 
 static volatile std::sig_atomic_t g_signalRaised = 0;
 
+namespace {
+
+constexpr int MD5_HASH_LENGTH = 32;
+constexpr int MIN_CHECKSUM_LINE_LENGTH = MD5_HASH_LENGTH + 2;
+constexpr int HASH_BUFFER_SIZE = 64 * 1024;
+constexpr int PROGRESS_STEPS = 1000;
+constexpr float MIN_PERCENT = 0.0F;
+constexpr float MAX_PERCENT = 100.0F;
+
+} // namespace
+
 void signalHandler(int signal)
 {
     g_signalRaised = signal;
@@ -195,15 +206,13 @@ QList<CheckTarget> CheckMD5::loadTargets(const QStringList& sumFiles)
             // Trim whitespace
             line = line.trimmed();
 
-            // Minimum line: 32 hex chars + space + path
-            if (line.length() < 34) {
+            if (line.length() < MIN_CHECKSUM_LINE_LENGTH) {
                 logMessage(true, QString("ERROR (%1 line %2): Line too short.\n").arg(filename).arg(lineNumber));
                 return {};
             }
 
-            // Extract and validate MD5 hash (first 32 characters)
-            QString hash = line.left(32).toUpper();
-            QRegularExpression hexRegex("^[0-9A-F]{32}$");
+            QString hash = line.left(MD5_HASH_LENGTH).toUpper();
+            QRegularExpression hexRegex(QString("^[0-9A-F]{%1}$").arg(MD5_HASH_LENGTH));
             if (!hexRegex.match(hash).hasMatch()) {
                 logMessage(
                     true,
@@ -212,7 +221,7 @@ QList<CheckTarget> CheckMD5::loadTargets(const QStringList& sumFiles)
             }
 
             // Find the start of the path (skip spaces after hash)
-            int pathStart = 32;
+            int pathStart = MD5_HASH_LENGTH;
             while (pathStart < line.length() && (line[pathStart] == ' ' || line[pathStart] == '\t')) {
                 ++pathStart;
             }
@@ -283,8 +292,6 @@ ExitCode CheckMD5::checkFiles(const QList<CheckTarget>& targets)
         updateProgress(processedSize, totalSize);
 
         MD5 hasher;
-        constexpr int bufferSize = 64 * 1024; // 64KB buffer
-
         bool fileAborted = false;
         while (!file.atEnd()) {
             if (checkForAbort()) {
@@ -293,7 +300,7 @@ ExitCode CheckMD5::checkFiles(const QList<CheckTarget>& targets)
                 break;
             }
 
-            QByteArray buffer = file.read(bufferSize);
+            QByteArray buffer = file.read(HASH_BUFFER_SIZE);
             hasher.update(buffer);
             processedSize += buffer.size();
 
@@ -396,7 +403,6 @@ ExitCode CheckMD5::checkFilesParallel(const QList<CheckTarget>& targets, int job
         }
 
         MD5 hasher;
-        constexpr int bufferSize = 64 * 1024;
         while (!file.atEnd()) {
             if (g_signalRaised) {
                 workerResult.aborted = true;
@@ -407,7 +413,7 @@ ExitCode CheckMD5::checkFilesParallel(const QList<CheckTarget>& targets, int job
                 break;
             }
 
-            QByteArray buffer = file.read(bufferSize);
+            QByteArray buffer = file.read(HASH_BUFFER_SIZE);
             if (buffer.isEmpty() && file.error() != QFileDevice::NoError) {
                 workerResult.error = file.errorString();
                 break;
@@ -571,8 +577,8 @@ void CheckMD5::updateProgress(qint64 processed, qint64 total)
 {
     if (processed >= m_nextProgressUpdate || processed >= total) {
         // Calculate percentage with bounds checking
-        float percentage = total > 0 ? (100.0F * processed) / total : 0.0F;
-        percentage = qBound(0.0F, percentage, 100.0F);
+        float percentage = total > 0 ? (MAX_PERCENT * processed) / total : MIN_PERCENT;
+        percentage = qBound(MIN_PERCENT, percentage, MAX_PERCENT);
 
         QString percentStr = QString::number(percentage, 'f', 1) + '%';
 
@@ -587,7 +593,7 @@ void CheckMD5::updateProgress(qint64 processed, qint64 total)
 
         // Update next progress threshold - ensure we don't divide by zero
         if (total > 0) {
-            qint64 nextDiv = qMax(total / 1000, qint64(1));
+            qint64 nextDiv = qMax(total / PROGRESS_STEPS, qint64(1));
             m_nextProgressUpdate = ((processed / nextDiv) + 1) * nextDiv;
         } else {
             m_nextProgressUpdate = processed + 1;

@@ -8,7 +8,7 @@ int main(int argc, char *argv[])
 
     // Set application information
     app.setApplicationName("checkmd5-qt");
-    app.setApplicationVersion(VERSION);
+    app.setApplicationVersion(CHECKMD5_VERSION);
     app.setOrganizationName("MX Linux");
 
     // Create and run the main application

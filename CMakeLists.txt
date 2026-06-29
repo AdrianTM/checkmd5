@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find Qt6
-find_package(Qt6 REQUIRED COMPONENTS Core Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Core)
 
 # Enable automatic MOC processing
 set(CMAKE_AUTOMOC ON)
@@ -21,7 +21,7 @@ add_executable(checkmd5-qt
 )
 
 # Link Qt libraries
-target_link_libraries(checkmd5-qt Qt6::Core Qt6::Concurrent)
+target_link_libraries(checkmd5-qt Qt6::Core)
 
 target_compile_options(checkmd5-qt PRIVATE
     -Wall

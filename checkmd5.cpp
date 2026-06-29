@@ -12,11 +12,10 @@
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
-#include <QtConcurrent/QtConcurrent>
 #include <QThreadPool>
-#include <QFuture>
-#include <QThread>
-#include <QVector>
+#include <QMutex>
+#include <QQueue>
+#include <QSemaphore>
 #include <QAtomicInteger>
 
 #include <algorithm>
@@ -28,10 +27,15 @@ namespace {
 
 constexpr int MD5_HASH_LENGTH = 32;
 constexpr int MIN_CHECKSUM_LINE_LENGTH = MD5_HASH_LENGTH + 2;
-constexpr int HASH_BUFFER_SIZE = 64 * 1024;
+constexpr int HASH_BUFFER_SIZE = 256 * 1024;
 constexpr int PROGRESS_STEPS = 1000;
 constexpr float MIN_PERCENT = 0.0F;
 constexpr float MAX_PERCENT = 100.0F;
+
+// How often the dispatcher wakes to refresh progress while workers are busy.
+// Completions wake it immediately via the semaphore; this only bounds how stale
+// the progress percentage can get during a long single-file hash.
+constexpr int PROGRESS_REFRESH_MS = 20;
 
 } // namespace
 
@@ -199,6 +203,10 @@ QList<CheckTarget> CheckMD5::loadTargets(const QStringList& sumFiles)
         QTextStream stream(&file);
         int lineNumber = 0;
 
+        // Base directory is identical for every line in this list, so resolve it once.
+        const QFileInfo md5FileInfo(filename);
+        const QDir baseDir(md5FileInfo.absolutePath());
+
         while (!stream.atEnd()) {
             QString line = stream.readLine();
             ++lineNumber;
@@ -212,7 +220,7 @@ QList<CheckTarget> CheckMD5::loadTargets(const QStringList& sumFiles)
             }
 
             QString hash = line.left(MD5_HASH_LENGTH).toUpper();
-            QRegularExpression hexRegex(QString("^[0-9A-F]{%1}$").arg(MD5_HASH_LENGTH));
+            static const QRegularExpression hexRegex(QString("^[0-9A-F]{%1}$").arg(MD5_HASH_LENGTH));
             if (!hexRegex.match(hash).hasMatch()) {
                 logMessage(
                     true,
@@ -234,9 +242,7 @@ QList<CheckTarget> CheckMD5::loadTargets(const QStringList& sumFiles)
             QString path = line.mid(pathStart);
 
             // Resolve path relative to the directory containing the .md5 file
-            QFileInfo md5FileInfo(filename);
-            QString basePath = md5FileInfo.absolutePath();
-            QFileInfo fileInfo(QDir(basePath).filePath(path));
+            QFileInfo fileInfo(baseDir.filePath(path));
 
             if (!fileInfo.exists()) {
                 logMessage(true, QString("ERROR (%1 line %2): Cannot stat: %3\n")
@@ -293,6 +299,7 @@ ExitCode CheckMD5::checkFiles(const QList<CheckTarget>& targets)
 
         MD5 hasher;
         bool fileAborted = false;
+        QByteArray buffer(HASH_BUFFER_SIZE, Qt::Uninitialized);
         while (!file.atEnd()) {
             if (checkForAbort()) {
                 result = ExitCode::Aborted;
@@ -300,9 +307,12 @@ ExitCode CheckMD5::checkFiles(const QList<CheckTarget>& targets)
                 break;
             }
 
-            QByteArray buffer = file.read(HASH_BUFFER_SIZE);
-            hasher.update(buffer);
-            processedSize += buffer.size();
+            const qint64 bytesRead = file.read(buffer.data(), HASH_BUFFER_SIZE);
+            if (bytesRead <= 0) {
+                break;
+            }
+            hasher.update(reinterpret_cast<const uint8_t*>(buffer.constData()), static_cast<size_t>(bytesRead));
+            processedSize += bytesRead;
 
             updateProgress(processedSize, totalSize);
         }
@@ -385,64 +395,74 @@ ExitCode CheckMD5::checkFilesParallel(const QList<CheckTarget>& targets, int job
         bool skipped = false;
     };
 
-    auto task = [processedBytes = &processedBytes, stopRequested = &stopRequested](int index,
-                                                                                  const CheckTarget& target) -> WorkerResult {
+    // Workers push finished results onto this queue and signal the semaphore; the
+    // dispatcher below wakes on each completion rather than polling on a timer.
+    QMutex resultMutex;
+    QQueue<WorkerResult> resultQueue;
+    QSemaphore completed;
+
+    auto task = [&resultMutex, &resultQueue, &completed, processedBytes = &processedBytes,
+                 stopRequested = &stopRequested](int index, const CheckTarget& target) {
         WorkerResult workerResult;
         workerResult.index = index;
         workerResult.target = target;
 
         if (stopRequested->loadAcquire()) {
             workerResult.skipped = true;
-            return workerResult;
-        }
-
-        QFile file(target.path);
-        if (!file.open(QIODevice::ReadOnly)) {
-            workerResult.error = file.errorString();
-            return workerResult;
-        }
-
-        MD5 hasher;
-        while (!file.atEnd()) {
-            if (g_signalRaised) {
-                workerResult.aborted = true;
-                break;
-            }
-            if (stopRequested->loadAcquire()) {
-                workerResult.skipped = true;
-                break;
-            }
-
-            QByteArray buffer = file.read(HASH_BUFFER_SIZE);
-            if (buffer.isEmpty() && file.error() != QFileDevice::NoError) {
+        } else {
+            QFile file(target.path);
+            if (!file.open(QIODevice::ReadOnly)) {
                 workerResult.error = file.errorString();
-                break;
+            } else {
+                MD5 hasher;
+                QByteArray buffer(HASH_BUFFER_SIZE, Qt::Uninitialized);
+                while (!file.atEnd()) {
+                    if (g_signalRaised) {
+                        workerResult.aborted = true;
+                        break;
+                    }
+                    if (stopRequested->loadAcquire()) {
+                        workerResult.skipped = true;
+                        break;
+                    }
+
+                    const qint64 bytesRead = file.read(buffer.data(), HASH_BUFFER_SIZE);
+                    if (bytesRead < 0) {
+                        workerResult.error = file.errorString();
+                        break;
+                    }
+                    if (bytesRead == 0) {
+                        break;
+                    }
+
+                    hasher.update(reinterpret_cast<const uint8_t*>(buffer.constData()),
+                                  static_cast<size_t>(bytesRead));
+
+                    processedBytes->fetchAndAddRelaxed(bytesRead);
+                }
+
+                if (workerResult.error.isEmpty() && file.error() != QFileDevice::NoError) {
+                    workerResult.error = file.errorString();
+                }
+
+                file.close();
+
+                if (!workerResult.aborted && !workerResult.skipped && workerResult.error.isEmpty()) {
+                    workerResult.digest = hasher.finalize();
+                }
             }
-
-            hasher.update(buffer);
-
-            processedBytes->fetchAndAddRelaxed(static_cast<qint64>(buffer.size()));
         }
 
-        if (workerResult.error.isEmpty() && file.error() != QFileDevice::NoError) {
-            workerResult.error = file.errorString();
+        {
+            QMutexLocker locker(&resultMutex);
+            resultQueue.enqueue(workerResult);
         }
-
-        file.close();
-
-        if (!workerResult.aborted && !workerResult.skipped && workerResult.error.isEmpty()) {
-            workerResult.digest = hasher.finalize();
-        }
-
-        return workerResult;
+        completed.release();
     };
 
     QThreadPool pool;
     pool.setMaxThreadCount(jobCount);
     pool.setExpiryTimeout(-1);
-
-    QVector<QFuture<WorkerResult>> futures;
-    futures.reserve(targets.size());
 
     int nextTarget = 0;
     int remaining = 0;
@@ -451,99 +471,89 @@ ExitCode CheckMD5::checkFilesParallel(const QList<CheckTarget>& targets, int job
             return false;
         }
 
-        futures.append(QtConcurrent::run(&pool, task, nextTarget, targets.at(nextTarget)));
+        const int index = nextTarget;
+        pool.start([&task, &targets, index]() { task(index, targets.at(index)); });
         ++nextTarget;
         ++remaining;
         return true;
     };
 
+    // Prime the pool with up to jobCount concurrent hashes.
     for (int i = 0; i < jobCount && startNext(); ++i) {
     }
 
-    QVector<bool> processed(futures.size(), false);
     qint64 passedSize = 0;
     int passed = 0;
     ExitCode result = ExitCode::Ok;
 
     while (remaining > 0) {
-        bool advanced = false;
+        // Block until a worker finishes, waking every PROGRESS_REFRESH_MS to keep
+        // the progress percentage current during a long-running hash.
+        const bool gotResult = completed.tryAcquire(1, PROGRESS_REFRESH_MS);
 
         scheduleProgressUpdate(processedBytes.loadRelaxed(), totalSize);
 
-        for (int index = 0; index < futures.size(); ++index) {
-            if (processed[index]) {
-                continue;
-            }
+        if (!gotResult) {
+            continue;
+        }
 
-            QFuture<WorkerResult>& future = futures[index];
-            if (!future.isFinished()) {
-                continue;
-            }
+        WorkerResult workerResult;
+        {
+            QMutexLocker locker(&resultMutex);
+            workerResult = resultQueue.dequeue();
+        }
+        --remaining;
 
-            WorkerResult workerResult = future.result();
-            processed[index] = true;
-            --remaining;
-            advanced = true;
-
-            scheduleProgressUpdate(processedBytes.loadRelaxed(), totalSize);
-
-            if (workerResult.aborted) {
-                if (result != ExitCode::Aborted) {
-                    if (!m_machine) {
-                        qInfo().noquote() << "";
-                    }
-                    logMessage(m_verbose, QString("Aborted: (signal %1)\n").arg(g_signalRaised));
-                    result = ExitCode::Aborted;
-                    stopRequested.storeRelease(1);
-                }
-                continue;
-            }
-
-            if (workerResult.skipped) {
-                continue;
-            }
-
-            if (!workerResult.error.isEmpty()) {
-                logMessage(true, QString("%1: %2\n").arg(workerResult.error, workerResult.target.path));
-                result = ExitCode::BadCheck;
-                if (!m_force) {
-                    stopRequested.storeRelease(1);
-                } else {
-                    while (remaining < jobCount && startNext()) {
-                        processed.resize(futures.size());
-                    }
-                }
-                continue;
-            }
-
-            logMessage(m_verbose, QString("Target: %1 %2\n").arg(workerResult.target.hash, workerResult.target.path));
-
-            const QString computedHash = QString::fromLatin1(workerResult.digest.toHex().toUpper());
-            const bool matches = (workerResult.target.hash == computedHash);
-
-            logMessage(m_verbose, QString("%1: %2 %3\n").arg(matches ? "Passed" : "Failed", computedHash, workerResult.target.path));
-
-            if (matches) {
-                ++passed;
-                passedSize += workerResult.target.size;
-            } else {
-                if (!m_verbose && !m_machine) {
+        if (workerResult.aborted) {
+            if (result != ExitCode::Aborted) {
+                if (!m_machine) {
                     qInfo().noquote() << "";
                 }
-                qWarning().noquote() << QCoreApplication::translate("CheckMD5", "Checksum mismatch") << ":" << workerResult.target.path;
-                result = ExitCode::BadCheck;
-                if (!m_force) {
-                    stopRequested.storeRelease(1);
+                logMessage(m_verbose, QString("Aborted: (signal %1)\n").arg(g_signalRaised));
+                result = ExitCode::Aborted;
+                stopRequested.storeRelease(1);
+            }
+            continue;
+        }
+
+        if (workerResult.skipped) {
+            continue;
+        }
+
+        if (!workerResult.error.isEmpty()) {
+            logMessage(true, QString("%1: %2\n").arg(workerResult.error, workerResult.target.path));
+            result = ExitCode::BadCheck;
+            if (!m_force) {
+                stopRequested.storeRelease(1);
+            } else {
+                while (remaining < jobCount && startNext()) {
                 }
             }
+            continue;
+        }
 
-            while (remaining < jobCount && startNext()) {
-                processed.resize(futures.size());
+        logMessage(m_verbose, QString("Target: %1 %2\n").arg(workerResult.target.hash, workerResult.target.path));
+
+        const QString computedHash = QString::fromLatin1(workerResult.digest.toHex().toUpper());
+        const bool matches = (workerResult.target.hash == computedHash);
+
+        logMessage(m_verbose, QString("%1: %2 %3\n").arg(matches ? "Passed" : "Failed", computedHash, workerResult.target.path));
+
+        if (matches) {
+            ++passed;
+            passedSize += workerResult.target.size;
+        } else {
+            if (!m_verbose && !m_machine) {
+                qInfo().noquote() << "";
+            }
+            qWarning().noquote() << QCoreApplication::translate("CheckMD5", "Checksum mismatch") << ":" << workerResult.target.path;
+            result = ExitCode::BadCheck;
+            if (!m_force) {
+                stopRequested.storeRelease(1);
             }
         }
 
-        if (!advanced) {
-            QThread::msleep(10);
+        while (remaining < jobCount && startNext()) {
         }
     }
 

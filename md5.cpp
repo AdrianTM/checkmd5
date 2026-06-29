@@ -118,16 +118,16 @@ QByteArray MD5::hash(const QByteArray& data)
 
 void MD5::byteReverse(uint8_t* buf, unsigned longs)
 {
-    if (QSysInfo::ByteOrder == QSysInfo::LittleEndian) {
+    if constexpr (QSysInfo::ByteOrder == QSysInfo::LittleEndian) {
         return;
-    }
-
-    while (longs > 0) {
-        const uint32_t temp = static_cast<uint32_t>((static_cast<unsigned>(buf[3]) << 8 | buf[2]) << 16
-                                                    | (static_cast<unsigned>(buf[1]) << 8 | buf[0]));
-        *static_cast<uint32_t*>(static_cast<void*>(buf)) = temp;
-        buf += 4;
-        --longs;
+    } else {
+        while (longs > 0) {
+            const uint32_t temp = static_cast<uint32_t>((static_cast<unsigned>(buf[3]) << 8 | buf[2]) << 16
+                                                        | (static_cast<unsigned>(buf[1]) << 8 | buf[0]));
+            *static_cast<uint32_t*>(static_cast<void*>(buf)) = temp;
+            buf += 4;
+            --longs;
+        }
     }
 }
 

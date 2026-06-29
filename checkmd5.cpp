@@ -157,6 +157,7 @@ ExitCode CheckMD5::run(const QStringList& arguments)
 
     m_nextProgressUpdate = 0;
     m_lastNotifiedProgress = 0;
+    m_lastShownPercent = -1;
     ExitCode result = jobCount > 1 ? checkFilesParallel(targets, jobCount) : checkFiles(targets);
 
     // Display result message (non-machine mode)
@@ -590,16 +591,24 @@ void CheckMD5::updateProgress(qint64 processed, qint64 total)
         float percentage = total > 0 ? (MAX_PERCENT * processed) / total : MIN_PERCENT;
         percentage = qBound(MIN_PERCENT, percentage, MAX_PERCENT);
 
-        QString percentStr = QString::number(percentage, 'f', 1) + '%';
+        // Report whole-integer percentages only, and only when the value
+        // actually changes, so scripts reading --machine output don't get the
+        // same percentage repeated on consecutive lines.
+        const int wholePercent = qRound(percentage);
+        if (wholePercent != m_lastShownPercent) {
+            m_lastShownPercent = wholePercent;
 
-        if (m_machine) {
-            QTextStream(stdout) << percentStr << '\n';
-        } else {
-            QTextStream(stdout) << QCoreApplication::translate("CheckMD5", "Checking") << ": " << percentStr << '\r';
+            if (m_machine) {
+                QTextStream(stdout) << wholePercent << "%\n";
+            } else {
+                QTextStream(stdout) << QCoreApplication::translate("CheckMD5", "Checking") << ": " << wholePercent
+                                    << "%\r";
+            }
+
+            emit progressUpdated(percentage);
         }
 
         m_lastNotifiedProgress = processed;
-        emit progressUpdated(percentage);
 
         // Update next progress threshold - ensure we don't divide by zero
         if (total > 0) {

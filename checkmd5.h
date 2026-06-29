@@ -47,4 +47,5 @@ private:
     qint64 m_nextProgressUpdate = 0;
     std::unique_ptr<QTextStream> m_logStream;
     qint64 m_lastNotifiedProgress = 0;
+    int m_lastShownPercent = -1; // last whole percent written; -1 = nothing shown yet
 };
